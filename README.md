@@ -2,6 +2,8 @@
 
 This small Node service keeps the OpenAI API key out of the Windows application. It accepts only selected, rendered planset pages and returns structured extraction results or a structured procurement rule.
 
+Version 0.4.3 restricts Critical EBoS extraction to the approved planset BOM categories `OCPD`, `DISCONNECT`, `MLO PANEL BOARD`, and `DC COMBINER BOX`. Notes are excluded, genuine `WIRING` rows are returned as non-critical Installer stock, and `7 JAW` is returned as Monitoring.
+
 ## Required environment variables
 
 - `OPENAI_API_KEY`: company-owned OpenAI API key. Never add it to source control or the desktop installer.
