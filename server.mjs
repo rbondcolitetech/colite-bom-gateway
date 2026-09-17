@@ -82,12 +82,18 @@ const analysisSchema = {
         inverterBrand: valueSchema({ type: "string" }),
         inverterModel: valueSchema({ type: "string" }),
         inverterCount: valueSchema({ type: "integer", minimum: 0 }),
+        moduleCount: valueSchema({ type: "integer", minimum: 0 }),
         rsdCount: valueSchema({ type: "integer", minimum: 0 }),
         rsdManufacturer: valueSchema({ type: "string" }),
         rsdModel: valueSchema({ type: "string" }),
+        usesAPSmart: valueSchema({ type: "boolean" }),
+        poiCount: valueSchema({ type: "integer", minimum: 1 }),
+        buildingCount: valueSchema({ type: "integer", minimum: 1 }),
         voltage: valueSchema({ type: "string", enum: ["208V", "480V"] }),
         hasCombinerPanel: valueSchema({ type: "boolean" }),
         combinerCount: valueSchema({ type: "integer", minimum: 0 }),
+        hasAccuenergyCtBox: valueSchema({ type: "boolean" }),
+        usesEcuC: valueSchema({ type: "boolean" }),
         ballastRequired: valueSchema({ type: "boolean" }),
         ballastBlocks: valueSchema({ type: "integer", minimum: 0 }),
         rackingSystem: valueSchema({ type: "string" }),
@@ -96,8 +102,9 @@ const analysisSchema = {
       },
       required: [
         "systemType", "roofType", "inverterMount", "inverterBrand", "inverterModel",
-        "inverterCount", "rsdCount", "rsdManufacturer", "rsdModel", "voltage",
-        "hasCombinerPanel", "combinerCount", "ballastRequired", "ballastBlocks",
+        "inverterCount", "moduleCount", "rsdCount", "rsdManufacturer", "rsdModel",
+        "usesAPSmart", "poiCount", "buildingCount", "voltage",
+        "hasCombinerPanel", "combinerCount", "hasAccuenergyCtBox", "usesEcuC", "ballastRequired", "ballastBlocks",
         "rackingSystem", "rackingFieldBays", "ecofootBaseCount"
       ],
     },
@@ -268,13 +275,16 @@ async function callOpenAI(input, name, schema, maxOutputTokens) {
   };
 }
 
-function analysisPrompt(pages, localFacts) {
+function analysisPrompt(pages) {
   return [
     "You are Colite BOM Intelligence, a cautious solar construction planset reviewer.",
     "Review only the attached selected page images. Return a value only when the page supports it; otherwise return null.",
+    "CLOUD-ONLY AUTHORITY: independently determine every supported field from the selected page images. Do not use desktop extraction, previously saved project facts, or remembered values. Every returned field needs a direct source quote from an attached page.",
     "Use exact printed manufacturer names, model numbers, part numbers, and full schedule quantities.",
     "CRITICAL RSD RULE: the BOM row quantity is the full RSD quantity. Never divide it by two, never infer one RSD per two modules, and never halve 52 to 26.",
     "For inverter quantities, use the planset Bill of Material or equipment schedule row and keep make, exact model, reference, and QTY aligned within that row.",
+    "Return usesAPSmart=true whenever the RSD manufacturer/model row identifies APSMART. Detect POI/building counts, Accuenergy CT boxes, and ECU-C explicitly because these facts drive special-accessory quantities.",
+    "SPECIAL-ACCESSORY INPUTS: prioritize exact inverter brand/model/count, inverter mounting location, roof type, service voltage, RSD manufacturer/model/count, combiner presence/count, building/POI count, Accuenergy CT-box presence, ECU-C presence, ballast status, and racking system/counts. Return every supported input that the reviewed sheets prove so the deterministic accessory library can run completely.",
     "For equipment mounting, distinguish roof, exterior wall/above grade, ground/equipment pad, interior, pole, and canopy. Cite the exact callout and do not infer a roof mount merely because the PV array is on a roof.",
     "RACKING SOURCE AUTHORITY: output racking materials only from a visible table whose title begins ARRAY PARTS LIST - [RACKING SYSTEM]. Transcribe only its PART NUMBER, DESCRIPTION, and QUANTITY columns. Never create racking materials from array layouts, ballast maps, block configurations, dimensions, numbered diagram symbols, engineering-output tables, detail sheets, notes, or sheet indexes.",
     "A racking row is valid only when it has a printed alphanumeric part number (or USER SUPPLIED), a written description, and a printed integer quantity in that Array Parts List row. Numeric strings, diagram labels, project/site numbers, dimensions, weights, and isolated words are never orderable rows.",
@@ -282,10 +292,9 @@ function analysisPrompt(pages, localFacts) {
     "For Ecofoot2+, part ES20207 is the Ecofoot base count. For RM systems, field-bay totals determine slip-sheet quantities. A ballast-block row from the Array Parts List must appear only once even when ballast is also detected elsewhere in the document.",
     "PLANSET BOM SOURCE AUTHORITY: output Critical EBoS only from a visible Bill of Material table row whose CATEGORY cell is exactly OCPD, DISCONNECT, MLO PANEL BOARD, or DC COMBINER BOX. The item description, notes, or nearby keywords can never qualify a row. Preserve that category text at the start of source.quote.",
     "Never output NEC prose, general notes, wiring/conduit notes, dimensions, section numbers, or specification sentences as materials. A genuine Bill of Material row whose CATEGORY cell is WIRING is non-critical Installer stock, never Critical EBoS; deterministic ownership will limit Colite ordering to self-performed projects.",
-    "CATEGORY MONITORING SYSTEM and 7 JAW equipment belong in Monitoring, never Critical EBoS. RSDs belong in Inverters / RSDs, not Critical EBoS.",
+    "CATEGORY MONITORING SYSTEM and 7 JAW equipment belong in Inverters / RSDs, never Critical EBoS. RSDs also belong in Inverters / RSDs.",
     "Do not include PV modules as an orderable material. Include all authoritative Array Parts List rows and only the approved Critical EBoS, Monitoring, or CATEGORY WIRING BOM rows described above.",
     "Confidence must reflect directness: 0.95+ only for an unambiguous schedule/callout, 0.75–0.94 for strong evidence, lower for ambiguity.",
-    `Local extraction is provided only as a cross-check and may be wrong: ${JSON.stringify(localFacts)}`,
     `Selected pages: ${JSON.stringify(pages.map(({ file, page, sheet, reason, textSnippet }) => ({ file, page, sheet, reason, textSnippet })))}`,
   ].join("\n");
 }
@@ -293,7 +302,7 @@ function analysisPrompt(pages, localFacts) {
 async function analyzeDocuments(body) {
   const pages = Array.isArray(body.pages) ? body.pages.slice(0, 12) : [];
   if (!pages.length) throw new Error("No selected plan pages were supplied.");
-  const content = [{ type: "input_text", text: analysisPrompt(pages, body.localFacts || {}) }];
+  const content = [{ type: "input_text", text: analysisPrompt(pages) }];
   for (const page of pages) {
     content.push({
       type: "input_text",
@@ -319,7 +328,7 @@ async function compileRule(ruleText) {
   const prompt = [
     "Convert the Colite procurement rule below into declarative structured logic only.",
     "Never output code. Use only the allowed fields, operators, categories, and arithmetic terms in the schema.",
-    "RSDs are Inverters / RSDs. OCPD/fuses/breakers, disconnects, MLO panel boards, and DC combiner boxes are Critical EBoS. 7 JAW equipment is Monitoring.",
+    "RSDs, 7 JAW monitoring equipment, Neo2 Dura cell kits, WDR-60-24/EDR-120-24 power supplies, and SMA Data Managers are Inverters / RSDs. OCPD/fuses/breakers, disconnects, MLO panel boards, and DC combiner boxes are Critical EBoS. Ballast blocks and slip sheets are Racking / mounting.",
     "For slip sheets: use rackingFieldBays for RM systems and ecofootBaseCount (ES20207) for Ecofoot2+ systems. If one rule needs two racking-specific formulas, warn that separate approved rules are required.",
     "Mark critical=true only when Colite always orders the item regardless of installer responsibility.",
     `Rule: ${text}`,

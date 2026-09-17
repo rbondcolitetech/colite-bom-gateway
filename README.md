@@ -2,7 +2,7 @@
 
 This small Node service keeps the OpenAI API key out of the Windows application. It accepts only selected, rendered planset pages and returns structured extraction results or a structured procurement rule.
 
-Version 0.4.3 restricts Critical EBoS extraction to the approved planset BOM categories `OCPD`, `DISCONNECT`, `MLO PANEL BOARD`, and `DC COMBINER BOX`. Notes are excluded, genuine `WIRING` rows are returned as non-critical Installer stock, and `7 JAW` is returned as Monitoring.
+Version 0.4.5 makes source-cited cloud values the exclusive detected inputs for BOM generation. It retains strict approved Critical EBoS categories and Array Parts List filtering, and classifies `7 JAW` with Inverters / RSDs.
 
 ## Required environment variables
 
